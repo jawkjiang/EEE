@@ -38,6 +38,9 @@ class GeneticAlgorithm:
         self.stats.register("max", lambda x: max(val[0] for val in x))
         self.hof = tools.HallOfFame(1)
 
+        # 初始化适应度记录列表
+        self.fitness_history = []
+
     def random_var(self, ranges):
         return [random.uniform(low, high) for low, high in ranges]
 
@@ -79,8 +82,50 @@ class GeneticAlgorithm:
     def run(self):
         random.seed(self.seed)
         pop = self.toolbox.population(n=self.pop_size)
-        algorithms.eaSimple(pop, self.toolbox, cxpb=self.cxpb, mutpb=self.mutpb, ngen=self.ngen,
-                            stats=self.stats, halloffame=self.hof, verbose=True)
+
+        # 记录每代适应度的函数
+        def record_fitness(pop):
+            fits = [ind.fitness.values[0] for ind in pop]
+            self.fitness_history.append(np.min(fits))
+
+        # 进化算法
+        for gen in range(self.ngen):
+            # 选择下一代个体
+            offspring = self.toolbox.select(pop, len(pop))
+            # 克隆个体
+            offspring = list(map(self.toolbox.clone, offspring))
+
+            # 交叉和变异
+            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                if random.random() < self.cxpb:
+                    self.toolbox.mate(child1, child2)
+                    del child1.fitness.values
+                    del child2.fitness.values
+
+            for mutant in offspring:
+                if random.random() < self.mutpb:
+                    self.toolbox.mutate(mutant)
+                    del mutant.fitness.values
+
+            # 评估个体
+            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+            fitnesses = map(self.toolbox.evaluate, invalid_ind)
+            for ind, fit in zip(invalid_ind, fitnesses):
+                ind.fitness.values = fit
+
+            # 替换旧种群
+            pop[:] = offspring
+
+            # 更新 Hall of Fame
+            self.hof.update(pop)
+
+            # 记录适应度
+            record_fitness(pop)
+
+            # 更新并打印统计信息
+            record = self.stats.compile(pop)
+            print(f"Gen: {gen}, Stats: {record}")
+
         return pop, self.stats, self.hof
 
 
@@ -121,3 +166,10 @@ if __name__ == "__main__":
     pop, log, hof = ga.run()
     print("Best individual is:", hof[0])
     print("Best fitness is:", hof[0].fitness.values[0])
+
+    # 打印每代适应度记录
+    print(ga.fitness_history)
+    import matplotlib.pyplot as plt
+    plt.plot(ga.fitness_history)
+    plt.show()
+

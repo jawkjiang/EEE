@@ -1,7 +1,7 @@
 from utils.factory import Factory
 
 """
-Question 2.1
+Question 2.2
 假设风光荷功率波动特性保持上述条件不变，制定联合园区的总储能最优配置方案，给出储能运行策略及购电计划，分析其经济性；
 """
 

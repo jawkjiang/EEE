@@ -43,20 +43,27 @@ class Factory:
         :return: Total cost in yuan
         """
         # Initialize
+        dataframe = pd.DataFrame(columns=['wind_power', 'solar_power', 'power_demand', 'power_grid', 'power_abandon', 'cost'])
         total_power = 0
         abandon_power = 0
         total_cost = 0
         for i in range(24):
+            temp_cost = 0
             # Calculate the power shortage
             power_shortage = self.power_demand_list[i] - (self.wind_power_list[i] + self.solar_power_list[i])
             if power_shortage < 0:
                 abandon_power += -power_shortage
             total_power = sum(self.power_demand_list)
             # Calculate the cost
-            total_cost += self.wind_power_list[i] * wind_power_price + self.solar_power_list[i] * solar_power_price
+            temp_cost += self.wind_power_list[i] * wind_power_price + self.solar_power_list[i] * solar_power_price
             if power_shortage > 0:
-                total_cost += power_shortage * power_demand_price
+                temp_cost += power_shortage * power_demand_price
+            total_cost += temp_cost
+
+            dataframe.loc[i] = [self.wind_power_list[i], self.solar_power_list[i], self.power_demand_list[i], power_shortage if power_shortage > 0 else 0, power_shortage if power_shortage < 0 else 0, temp_cost]
         average_cost = total_cost / total_power
+        print(dataframe)
+        dataframe.to_csv(f"C://Users/Jawk/PycharmProjects/EEE/EEE/data/result_{self.name}_1_1.csv")
         return total_power+abandon_power, abandon_power, total_cost, average_cost
 
     def calculate_cost_with_battery(self):
@@ -259,9 +266,26 @@ class Factory:
                     individual[3 * i + 2] = individual[3 * (i - 1) + 2] - individual[3 * (i - 1)]
             nonlinear_eq_constraints.append(SOC_balance)
 
-        var_ranges.append((0.5 * self.battery_power, 1.5 * self.battery_power))
-        var_ranges.append((0.5 * self.battery_capacity, 1.5 * self.battery_capacity))
+        var_ranges.append((0.5 * 1000, 1.5 * 1000))
+        var_ranges.append((0.5 * 2000, 1.5 * 2000))
         var_ranges.append((0.1, 0.9))
+
+        def battery_power_lower_bound(individual):
+            battery_power_list = [abs(individual[3 * i]) for i in range(24)]
+            individual[72] = max(battery_power_list)
+
+        nonlinear_eq_constraints.append(battery_power_lower_bound)
+
+        def battery_capacity_lower_bound(individual):
+            SOC_list = [individual[3 * i + 2] for i in range(24)]
+            return individual[73] - max(SOC_list) / 0.8
+
+        def battery_capacity_upper_bound(individual):
+            SOC_list = [individual[3 * i + 2] for i in range(24)]
+            return -individual[73] + min(SOC_list) / 0.2
+
+        constraints.append(battery_capacity_lower_bound)
+        constraints.append(battery_capacity_upper_bound)
 
         ga = GeneticAlgorithm(objective_func=objective, constraints=constraints,
                                nonlinear_eq_constraints=nonlinear_eq_constraints, n_vars=24 * 3 + 3, var_ranges=var_ranges, ngen=10000, pop_size=100, cxpb=0.8, mutpb=0.3, penalty_factor=1e6)
@@ -274,6 +298,9 @@ class Factory:
         result = hof[0].fitness.values[0] + sum(self.wind_power_list[i] * wind_power_price + self.solar_power_list[i] * solar_power_price for i in range(24))
         dataframe.loc[26] = ["result", "", ""]
         dataframe.loc[27] = [result, "", ""]
+        new_data = pd.Series(ga.fitness_history, name='convergence')
+        dataframe = pd.concat([dataframe, new_data], axis=1)
+        dataframe.fillna("", inplace=True)
         timestamp = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
         dataframe.to_csv(f"C://Users/Jawk/PycharmProjects/EEE/EEE/data/result_{self.name}_1_3_{timestamp}.csv")
 
@@ -489,10 +516,36 @@ class Factory:
                     individual[3 * i + 2] = individual[3 * (i - 1) + 2] - individual[3 * (i - 1)]
             nonlinear_eq_constraints.append(SOC_balance)
 
-        var_ranges.append((0.5 * self.battery_power, 2 * self.battery_power))
-        var_ranges.append((0.5 * self.battery_capacity, 2 * self.battery_capacity))
+        var_ranges.append((0.5 * 1000, 2 * 1000))
+        var_ranges.append((0.5 * 2000, 2 * 2000))
         var_ranges.append((0.1, 0.9))
         var_ranges.append((500, 1500))
+
+        def battery_power_lower_bound(individual):
+            battery_power_list = [abs(individual[3 * i]) for i in range(24)]
+            individual[72] = max(battery_power_list)
+
+        nonlinear_eq_constraints.append(battery_power_lower_bound)
+
+        """
+        def battery_capacity_lower_bound(individual):
+            SOC_list = [individual[3 * i + 2] for i in range(24)]
+            return individual[73] - max(SOC_list) / 0.7
+
+        def battery_capacity_upper_bound(individual):
+            SOC_list = [individual[3 * i + 2] for i in range(24)]
+            return -individual[73] + min(SOC_list) / 0.3
+
+        constraints.append(battery_capacity_lower_bound)
+        constraints.append(battery_capacity_upper_bound)
+        """
+
+        def battery_power_lower_bound(individual):
+            return -individual[72] + 500
+
+        def battery_capacity_lower_bound(individual):
+            return -individual[73] + 1000
+
 
         def wind_power_lower_bound(individual):
             return -individual[75]
@@ -578,6 +631,8 @@ class Factory:
         nonlinear_eq_constraints = []
         var_ranges = []
 
+        import inspect
+
         for month in range(12):
             for i in range(24):
 
@@ -586,42 +641,42 @@ class Factory:
                 else:
                     var_ranges.append((0, self.battery_power))
 
-                def battery_power_upper_bound(individual, i=i):
+                def battery_power_upper_bound(individual, i=i, month=month):
                     return individual[24 * month * 3 + 3 * i] - individual[864]
                 constraints.append(battery_power_upper_bound)
 
-                def battery_power_lower_bound(individual, i=i):
+                def battery_power_lower_bound(individual, i=i, month=month):
                     return -individual[864] - individual[24 * month * 3 + 3 * i]
                 constraints.append(battery_power_lower_bound)
 
-                var_ranges.append((0, math.inf))
+                var_ranges.append((0, 2000))
 
-                def power_grid_lower_bound(individual, i=i):
+                def power_grid_lower_bound(individual, i=i, month=month):
                     return -individual[24 * month * 3 + 3 * i + 1]
                 constraints.append(power_grid_lower_bound)
 
                 var_ranges.append((0.1 * self.battery_capacity, 0.9 * self.battery_capacity))
 
-                def SOC_upper_bound(individual, i=i):
+                def SOC_upper_bound(individual, i=i, month=month):
                     return individual[24 * month * 3 + 3 * i + 2] - 0.9 * individual[865]
                 constraints.append(SOC_upper_bound)
 
-                def SOC_lower_bound(individual, i=i):
+                def SOC_lower_bound(individual, i=i, month=month):
                     return 0.1 * individual[865] - individual[24 * month * 3 + 3 * i + 2]
                 constraints.append(SOC_lower_bound)
 
                 if i == 23:
-                    def final_SOC_upper_bound(individual, i=i):
+                    def final_SOC_upper_bound(individual, i=i, month=month):
                         return individual[24 * month * 3 + 3 * i + 2] - individual[24 * month * 3 + 3 * i] - (individual[866]*1.01) * individual[865]
 
                     constraints.append(final_SOC_upper_bound)
 
-                    def final_SOC_lower_bound(individual, i=i):
+                    def final_SOC_lower_bound(individual, i=i, month=month):
                         return (individual[866]*0.99) * individual[865] - (individual[24 * month * 3 + 3 * i + 2] - individual[24 * month * 3 + 3 * i])
 
                     constraints.append(final_SOC_lower_bound)
 
-                def power_balance(individual, i=i):
+                def power_balance(individual, i=i, month=month):
                     wind_power = self.wind_power_list24[month][i] * individual[867]
                     solar_power = self.solar_power_list24[month][i] * individual[868]
                     shortage = self.power_demand_list[i] - wind_power - solar_power
@@ -641,15 +696,21 @@ class Factory:
                         individual[24 * month * 3 + 3 * i + 1] = temp
                 nonlinear_eq_constraints.append(power_balance)
 
-                def SOC_balance(individual, i=i):
+                def SOC_balance(individual, i=i, month=month):
                     if i == 0:
                         individual[24 * month * 3 + 3 * i + 2] = individual[866] * individual[865]
                     else:
                         individual[24 * month * 3 + 3 * i + 2] = individual[24 * month * 3 + 3 * (i - 1) + 2] - individual[24 * month * 3 + 3 * (i - 1)]
                 nonlinear_eq_constraints.append(SOC_balance)
 
-        var_ranges.append((0.5 * self.battery_power, 2 * self.battery_power))
-        var_ranges.append((0.5 * self.battery_capacity, 2 * self.battery_capacity))
+        var_ranges.append((0.5 * 500, 2 * 500))
+        def battery_power_lower_bound(individual):
+            return -individual[864] + 200
+        constraints.append(battery_power_lower_bound)
+        var_ranges.append((0.5 * 1000, 2 * 1000))
+        def capacity_lower_bound(individual):
+            return -individual[865] + 400
+        constraints.append(capacity_lower_bound)
         var_ranges.append((0.1, 0.9))
         var_ranges.append((500, 1500))
 
@@ -662,10 +723,9 @@ class Factory:
         constraints.append(wind_power_lower_bound)
         constraints.append(solar_power_lower_bound)
 
-        var_ranges.append((500, 1500))
 
         ga = GeneticAlgorithm(objective_func=objective, constraints=constraints,
-                               nonlinear_eq_constraints=nonlinear_eq_constraints, n_vars=24 * 12 * 3 + 5, var_ranges=var_ranges, ngen=1000, pop_size=100, cxpb=0.8, mutpb=0.3, penalty_factor=1e6)
+                               nonlinear_eq_constraints=nonlinear_eq_constraints, n_vars=24 * 12 * 3 + 5, var_ranges=var_ranges, ngen=10000, pop_size=100, cxpb=0.8, mutpb=0.5, penalty_factor=1e9)
         pop, log, hof = ga.run()
         dataframe = pd.DataFrame(columns=['battery_power', 'power_grid', 'SOC'])
         for month in range(12):
@@ -677,6 +737,6 @@ class Factory:
         dataframe.loc[24 * 12 + 2] = ["result", "wind", "solar"]
         dataframe.loc[24 * 12 + 3] = [result, hof[0][867], hof[0][868]]
         timestamp = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-        dataframe.to_csv(f"C://Users/Jawk/PycharmProjects/EEE/EEE/data/result_{self.name}_3_1_{timestamp}.csv")
+        dataframe.to_csv(f"C://Users/Jawk/PycharmProjects/EEE/EEE/data/result_{self.name}_3_2_{timestamp}.csv")
 
 
